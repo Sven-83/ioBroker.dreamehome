@@ -5936,7 +5936,12 @@ class Dreamehome extends utils.Adapter {
     Alexarooms.length = 0;
 
     // Iterate through rooms
+    // rooms hidden in the app (delsr) get no folder and no Alexa entry
+    const hiddenRooms = Array.isArray(customMapData.delsr) ? customMapData.delsr : [];
     for (const iRoom of Mrooms) {
+      if (hiddenRooms.includes(iRoom['room_id'])) {
+        continue;
+      }
       const { walls } = iRoom;
       const CheckArrayRoomsX = [];
       const CheckArrayRoomsY = [];
