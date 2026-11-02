@@ -14,6 +14,8 @@ const Json2iob = require('json2iob');
 const crypto = require('crypto');
 const mqtt = require('mqtt');
 const zlib = require('node:zlib');
+/** private root CA of the Dreame MQTT broker, see lib/dreame-mqtt-ca.pem */
+const DH_MQTT_CA = require('node:fs').readFileSync(require('node:path').join(__dirname, 'lib', 'dreame-mqtt-ca.pem'));
 const { createCipheriv, createDecipheriv, randomBytes, createHash } = require('crypto');
 const {
   createCanvas,
@@ -3057,6 +3059,8 @@ const DH_DHURLGDF = new Buffer.from(DHURLGDF, 'base64');
 
 let DH_Map = {};
 let In_path = '';
+/** login response fields that may be stored in login.* (never access_token / refresh_token) */
+const DH_LOGIN_PUBLIC_FIELDS = ['uid', 'country', 'lang', 'tenant_id', 'expires_in', 'domain', 'region'];
 let DH_Auth = '',
   DH_AuthRef = '',
   DH_Expires = '',
@@ -3711,11 +3715,9 @@ class Dreamehome extends utils.Adapter {
     }).then(async (response) => {
       const responseData = response.data;
       if (LogData) {
-        this.log.info('Login response: ' + JSON.stringify(response.data));
+        this.log.info('Login response received (tokens redacted)');
       }
-      const RetObject = JSON.parse(JSON.stringify(responseData));
-
-      await this.DH_PropObject(RetObject, 'login.', 'Login: ');
+      await this.DH_storeLoginInfo(responseData);
       this.setState('info.connection', true, true);
       DH_Auth = responseData['access_token'];
       DH_AuthRef = responseData['refresh_token'];
@@ -3908,7 +3910,7 @@ class Dreamehome extends utils.Adapter {
       await this.DH_PropObject(GetCloudRequestOTCInfo.data, DH_Did + '.general.', 'Get OTCInfo: ');
       //return responseData;
     }).catch((error) => {
-      this.log.warn('Unable to login to device over cloud: DH_CloudLogin | Login error response: ' + JSON.stringify(error));
+      this.log.warn('Unable to login to device over cloud: DH_CloudLogin | Login error: ' + this.DH_errorText(error));
       error.response && this.log.error('Login error response: ' + JSON.stringify(error.response.data));
       this.setState('info.connection', false, true);
     });
@@ -4033,6 +4035,48 @@ class Dreamehome extends utils.Adapter {
   }
 
 
+  /**
+   * Writes only the non-secret fields of a login / refresh response to login.*.
+   * access_token and refresh_token stay in the module variables (DH_Auth, DH_AuthRef) only.
+   * Removes login.* states left over from older versions (they held the tokens in clear text).
+   */
+  async DH_storeLoginInfo(responseData) {
+    const publicInfo = {};
+    for (const key of DH_LOGIN_PUBLIC_FIELDS) {
+      if (responseData && responseData[key] !== undefined && responseData[key] !== null) {
+        publicInfo[key] = responseData[key];
+      }
+    }
+    await this.DH_PropObject(publicInfo, 'login.', null);
+    if (!this.loginStatesCleaned) {
+      this.loginStatesCleaned = true;
+      try {
+        const objs = await this.getObjectViewAsync('system', 'state', {
+          startkey: `${this.namespace}.login.`,
+          endkey: `${this.namespace}.login.香`,
+        });
+        for (const row of objs.rows) {
+          const key = row.id.substring(`${this.namespace}.login.`.length);
+          if (!DH_LOGIN_PUBLIC_FIELDS.includes(key)) {
+            await this.delObjectAsync(row.id);
+            this.log.info(`Removed old login state ${row.id} (could contain a token)`);
+          }
+        }
+      } catch (error) {
+        this.log.warn(`Cleanup of old login states failed: ${error.message}`);
+      }
+    }
+  }
+
+  /** Error text without request config (axios errors carry headers with the auth token and the password hash) */
+  DH_errorText(error) {
+    if (!error) {
+      return 'unknown error';
+    }
+    const status = error.response && error.response.status ? ` (HTTP ${error.response.status})` : '';
+    return `${error.message || String(error)}${status}`;
+  }
+
   async DH_PropObject(InData, InPath, InLog) {
     for (const [key, value] of Object.entries(InData)) {
       const path = `${InPath}${key}`;
@@ -4074,7 +4118,7 @@ class Dreamehome extends utils.Adapter {
       }
       return response.data;
     }).catch((error) => {
-      this.log.warn(JSON.stringify(error));
+      this.log.warn(`Cloud request ${DHurl} failed: ${this.DH_errorText(error)}`);
     });
   }
 
@@ -6934,7 +6978,7 @@ class Dreamehome extends utils.Adapter {
       }
       return response.data;
     }).catch((error) => {
-      this.log.warn('unable to send Command: DH_URLSend | ' + SetData + ' | Error: ' + JSON.stringify(error));
+      this.log.warn('unable to send Command: DH_URLSend | ' + SetData + ' | Error: ' + this.DH_errorText(error));
     });
   }
 
@@ -6955,7 +6999,7 @@ class Dreamehome extends utils.Adapter {
 
       // 2. Convert public key to Base64
       const publicKeyBase64 = publicKey.toString('base64');
-      this.log.info(`[AES] Sent Public Key: ${publicKeyBase64}`);
+      this.log.debug('[AES] Public key sent');
 
       // 3. Call action 14,1 with piid=5
       const requestId = Math.floor(Math.random() * 9000) + 1000;
@@ -6992,7 +7036,7 @@ class Dreamehome extends utils.Adapter {
           return null;
         }
 
-        this.log.info(`[AES] Received response (encrypted): ${encryptedKeyBase64}`);
+        this.log.debug('[AES] Encrypted key received');
 
         // 5. Convert the private key into a usable key object
         const privateKeyObject = crypto.createPrivateKey({
@@ -7015,7 +7059,7 @@ class Dreamehome extends utils.Adapter {
 
         // 7. STORE AS BASE64
         const aesKeyBase64 = aesKey.toString('base64');
-        this.log.info(`[AES] Decrypted AES key (Base64): ${aesKeyBase64}`);
+        this.log.debug('[AES] AES key decrypted (redacted)');
 
         return aesKeyBase64;
       }
@@ -7042,7 +7086,9 @@ class Dreamehome extends utils.Adapter {
       clientId: 'p_' + crypto.randomBytes(8).toString('hex'), // Generate a unique client ID
       username: DH_Uid,
       password: DH_Auth,
-      rejectUnauthorized: false, // Allow self-signed certificates (if applicable)
+      // verify the broker certificate against the pinned Dreame root CA (was rejectUnauthorized: false)
+      ca: DH_MQTT_CA,
+      rejectUnauthorized: true,
       reconnectPeriod: 10000, // Automatic reconnect interval (10 seconds)
       keepalive: 60, // Send keepalive packets every 60 seconds
       connectTimeout: 30000, // Connection timeout (30 seconds)
@@ -10203,11 +10249,9 @@ class Dreamehome extends utils.Adapter {
     }).then(async (response) => {
       const responseData = response.data;
       if (LogData) {
-        this.log.info('Refresh Token response: ' + JSON.stringify(response.data));
+        this.log.info('Refresh Token response received (tokens redacted)');
       }
-      const RetObject = JSON.parse(JSON.stringify(responseData));
-
-      await this.DH_PropObject(RetObject, 'login.', 'Refresh Token: ');
+      await this.DH_storeLoginInfo(responseData);
 
       DH_Auth = responseData['access_token'];
       DH_AuthRef = responseData['refresh_token'];
@@ -10221,7 +10265,7 @@ class Dreamehome extends utils.Adapter {
       this.DH_connectMqtt();
       this.setState('info.connection', true, true);
     }).catch((error) => {
-      this.log.warn('Refresh Token error: ' + JSON.stringify(error));
+      this.log.warn('Refresh Token error: ' + this.DH_errorText(error));
       error.response && this.log.error('Refresh Token error response: ' + JSON.stringify(error.response.data));
       this.setState('info.connection', false, true);
     });
