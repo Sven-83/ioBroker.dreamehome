@@ -3549,7 +3549,7 @@ class Dreamehome extends utils.Adapter {
     if (!DH_RobotAesKey) {
       this.log.error(`[MAIN] ❌ Konnte keinen AES-Key vom Roboter erhalten!`);
     } else {
-      this.log.info(`[MAIN] ✅ AES-Key erfolgreich geladen: ${DH_RobotAesKey}`);
+      this.log.info('[MAIN] ✅ AES-Key erfolgreich geladen (redacted)');
     }
 
     // After successful login and if DH_Did, DH_Uid, and DH_Region are set
