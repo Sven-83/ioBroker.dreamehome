@@ -121,20 +121,21 @@ const SegmentToName = {
   'DE': {
     0: 'Raum',
     1: 'Wohnzimmer',
-    2: 'Hauptschlafzimmer',
+    // names as in the German Dreamehome app (2, 5, 6, 8, 9, 15 confirmed on an X40 Ultra, 2026-11)
+    2: 'Schlafzimmer',
     3: 'Arbeitszimmer',
     4: 'Küche',
-    5: 'Speisesaal',
-    6: 'Badezimmer',
+    5: 'Esszimmer',
+    6: 'Bad',
     7: 'Balkon',
-    8: 'Korridor',
-    9: 'Hauswirtschaftsraum',
+    8: 'Flur',
+    9: 'Allzweckraum',
     10: 'Schrank',
     11: 'Besprechungsraum',
     12: 'Büro',
     13: 'Fitnessbereich',
     14: 'Erholungsgebiet',
-    15: 'Zweites Schlafzimmer'
+    15: 'Nebenzimmer'
   }
 };
 
@@ -684,20 +685,20 @@ const DreameSegmentTypeCode = {
   'DE': {
     0: 'Raum',
     1: 'Wohnzimmer',
-    2: 'Hauptschlafzimmer',
+    2: 'Schlafzimmer',
     3: 'Arbeitszimmer',
     4: 'Küche',
     5: 'Esszimmer',
-    6: 'Badezimmer',
+    6: 'Bad',
     7: 'Balkon',
     8: 'Flur',
-    9: 'Abstellraum',
+    9: 'Allzweckraum',
     10: 'Kleiderschrank',
     11: 'Besprechungsraum',
     12: 'Büro',
     13: 'Fitnessbereich',
     14: 'Freizeitbereich',
-    15: 'Gästeschlafzimmer'
+    15: 'Nebenzimmer'
   }
 };
 
@@ -5953,10 +5954,21 @@ class Dreamehome extends utils.Adapter {
       };
 
       // Extract segment type from seg_inf
-      const SegmentType = customMapData.seg_inf?.[iRoom['room_id']]?.type;
-      SortiRoom.Name = SegmentType === 0
-        ? await this.DH_Base64DecodeUnicode(customMapData.seg_inf[iRoom['room_id']].name)
-        : SegmentToName[UserLang]?.[SegmentType] || `Room_${SortiRoom.Id}`;
+      // Name like the app: own name first, else room type + number when the type occurs more than once
+      // ("Nebenzimmer 2"); before, two rooms of one type got the same folder and one of them was lost
+      const segInfo = customMapData.seg_inf?.[iRoom['room_id']];
+      let customName = '';
+      if (segInfo?.name) {
+        try {
+          customName = String(await this.DH_Base64DecodeUnicode(segInfo.name) || '').trim();
+        } catch {
+          customName = '';
+        }
+      }
+      SortiRoom.Name = customName
+        || (SegmentToName[UserLang]?.[segInfo?.type] !== undefined
+          ? this.getRoomTypeName(segInfo.type, segInfo.index || 0)
+          : `Room_${SortiRoom.Id}`);
 
       // Add room to CheckArrayRooms
       CheckArrayRooms.push(SortiRoom);
