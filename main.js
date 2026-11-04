@@ -80,6 +80,8 @@ const DH_ScaleValue = 20; // Min 14 | Default 14.5
 //<=================End Map Settings
 //=================>Start Global
 let DH_OldTaskStatus = -1, DH_NewTaskStatus = -1, DH_NowTaskStatus = -1, DH_NowStatus = -1, DH_CleanStatus = false, DH_SetLastStatus = false, DH_CompletStatus = 0;
+const MQTT_RECONNECT_MIN_MS = 10000;
+const MQTT_RECONNECT_MAX_MS = 30 * 60 * 1000;
 let DH_NowCleaningMode = 0;
 // S4P23 packs the mop wash area (m², high byte) and the cleaning mode (low byte): 20 m² + mode 3 = 5123.
 // The mode tables below use 20 m² (51xx); incoming values are normalized to that, writes put the real area back.
@@ -3178,7 +3180,8 @@ class Dreamehome extends utils.Adapter {
       return;
     }
 
-    DH_UpdateMapInterval = setInterval(function(){DH_UpdateTheMap = true;}, 1000);
+    // map updates from MQTT are taken at most once per second; adapter interval, cleared on unload
+    DH_UpdateMapInterval = this.setInterval(() => { DH_UpdateTheMap = true; }, 1000);
 
     this.subscribeStates('*.control.*');
     this.log.info('Login and request Dreame data from cloud');
@@ -3313,6 +3316,8 @@ class Dreamehome extends utils.Adapter {
         },
         native: {}
       });
+
+      await this.ensureRobotUpdateState();
 
       // Mop wash area (m²) and wetness level 1–32 as writable controls (S4P23 high byte, S28P1)
       await this.setObjectNotExistsAsync(DH_Did + '.control.MopWashArea', {
@@ -3859,7 +3864,7 @@ class Dreamehome extends utils.Adapter {
 
           // WaterTracker.initialize():
           if (initSuccess) {
-            this.log.info(`[WATER] Tracker initialized successfully for ${DH_Model}`);
+            this.log.debug(`[WATER] Tracker initialized successfully for ${DH_Model}`);
 
           } else {
             this.log.error(`[WATER] Tracker initialization returned false`);
@@ -3909,11 +3914,11 @@ class Dreamehome extends utils.Adapter {
           const GetCloudRequestDeviceData = await this.DH_URLRequest(DH_URLPROP, SETURLData);
           let RetPointValue = JSON.parse(JSON.stringify(GetCloudRequestDeviceData.data))[0].value;
           if (RetPointValue) {
-		   //this.log.info("============Get " + SPvalue + " response: " + JSON.stringify(GetCloudRequestDeviceData));
+		   //this.log.debug("============Get " + SPvalue + " response: " + JSON.stringify(GetCloudRequestDeviceData));
             const path = DH_Did + '.state.' + SPvalue.replace(/\w\S*/g, function(SPName) {
               return SPName.charAt(0).toUpperCase() + SPName.substr(1).toLowerCase();
             }).replace(/\s/g, '');
-            this.log.info('Get and update ' + SPvalue + ' value to: ' + JSON.stringify(RetPointValue));
+            this.log.debug('Get and update ' + SPvalue + ' value to: ' + JSON.stringify(RetPointValue));
             if (path) {
               if (Object.prototype.toString.call(RetPointValue).match(/\s([\w]+)/)[1].toLowerCase() == 'array') {
                 RetPointValue = JSON.stringify(RetPointValue);
@@ -3966,7 +3971,7 @@ class Dreamehome extends utils.Adapter {
       if (this.waterTracker) {
         // 1. Disable startup protection
         this.waterTracker.firstStartWaterTrack = false; // Set status to false to track the tank, false to prevent cloud reset.
-        this.log.info(`[WaterTracking] Initial status polling completed - ready for live updates. FirstStartFlag: ${this.waterTracker.firstStartWaterTrack}`);
+        this.log.debug(`[WaterTracking] Initial status polling completed - ready for live updates. FirstStartFlag: ${this.waterTracker.firstStartWaterTrack}`);
 
 	 // 2. Check for an active cleaning task
         try {
@@ -4691,11 +4696,11 @@ class Dreamehome extends utils.Adapter {
           const calculatedRoomArea = this.calculateRoomArea(room);
 
           this.log.info(`--- Processing Room ${id}: "${room.name || 'Unnamed'}", Area: ${calculatedRoomArea} m², (Type: ${room.type}, Index: ${room.index}) ---`);
-          this.log.info(`Pixel count: ${room.pixels.length}, Border count: ${room.borders.length}`);
-          this.log.info(`Bounds (grid): minX=${room.minX}, maxX=${room.maxX}, minY=${room.minY}, maxY=${room.maxY}`);
-          this.log.info(`Grid size: ${gridSize} mm`);
+          this.log.debug(`Pixel count: ${room.pixels.length}, Border count: ${room.borders.length}`);
+          this.log.debug(`Bounds (grid): minX=${room.minX}, maxX=${room.maxX}, minY=${room.minY}, maxY=${room.maxY}`);
+          this.log.debug(`Grid size: ${gridSize} mm`);
           this.log.debug(`Bounds (mm): minX=${room.minXmm}, maxX=${room.maxXmm}, minY=${room.minYmm}, maxY=${room.maxYmm}`);
-          this.log.info(`Polygon created: outer points=${room.polygon ? room.polygon.length : 0}, holes=${room.holes ? room.holes.length : 0}`);
+          this.log.debug(`Polygon created: outer points=${room.polygon ? room.polygon.length : 0}, holes=${room.holes ? room.holes.length : 0}`);
         });
       }
 
@@ -5178,11 +5183,11 @@ class Dreamehome extends utils.Adapter {
           const calculatedRoomArea = this.calculateRoomArea(room);
 
           this.log.info(`--- Processing Room ${id}: "${room.name || 'Unnamed'}", Area: ${calculatedRoomArea} m², (Type: ${room.type}, Index: ${room.index}) ---`);
-          this.log.info(`Pixel count: ${room.pixels.length}, Border count: ${room.borders.length}`);
-          this.log.info(`Bounds (grid): minX=${room.minX}, maxX=${room.maxX}, minY=${room.minY}, maxY=${room.maxY}`);
-          this.log.info(`Grid size: ${gridSize} mm`);
+          this.log.debug(`Pixel count: ${room.pixels.length}, Border count: ${room.borders.length}`);
+          this.log.debug(`Bounds (grid): minX=${room.minX}, maxX=${room.maxX}, minY=${room.minY}, maxY=${room.maxY}`);
+          this.log.debug(`Grid size: ${gridSize} mm`);
           this.log.debug(`Bounds (mm): minX=${room.minXmm}, maxX=${room.maxXmm}, minY=${room.minYmm}, maxY=${room.maxYmm}`);
-          this.log.info(`Polygon created: outer points=${room.polygon ? room.polygon.length : 0}, holes=${room.holes ? room.holes.length : 0}`);
+          this.log.debug(`Polygon created: outer points=${room.polygon ? room.polygon.length : 0}, holes=${room.holes ? room.holes.length : 0}`);
         });
       }
 
@@ -6640,7 +6645,7 @@ class Dreamehome extends utils.Adapter {
 		      }
             }
             if (LogData) {
-			   this.log.info('Set and update ' + SPvalue + ' value to: ' + JSON.stringify(RetPointValue));
+			   this.log.debug('Set and update ' + SPvalue + ' value to: ' + JSON.stringify(RetPointValue));
             }
             await this.setState(path, RetPointValue, true);
           }
@@ -6797,7 +6802,7 @@ class Dreamehome extends utils.Adapter {
       DH_SetLastStatus = false;
       DH_OldTaskStatus = DH_NewTaskStatus;
       //if (LogData) {
-      this.log.info('A new cleaning was initiated, the object state PosHistory was reset to :' + DH_OldTaskStatus);
+      this.log.debug('A new cleaning was initiated, the object state PosHistory was reset to :' + DH_OldTaskStatus);
 
 	   await this.resetTrHistory(); // [TR] History reset for new cleaning
       await this.resetPosHistory(); // // Reset cache: '[TR2POS] Reset for new cleaning
@@ -6924,7 +6929,7 @@ class Dreamehome extends utils.Adapter {
 
     if (this.history) {
       const now = Date.now();
-      this.log.info('[HISTORY] Starting update check');
+      this.log.debug('[HISTORY] Starting update check');
       // Checks every 10 seconds for new history data (max ~4 min)
       await this.history.waitForNewCleaning(now);
 
@@ -6950,7 +6955,7 @@ class Dreamehome extends utils.Adapter {
       const historyUrl = `https://${DH_Region}.iot.dreame.tech:13267/dreame-user-iot/iotstatus/history`;
 
       const response = await this.DH_URLRequest(historyUrl, params);
-      this.log.info(historyUrl + ' | ' + JSON.stringify(response) + ' | Response: ' + JSON.stringify(response.data));
+      this.log.debug(historyUrl + ' | ' + JSON.stringify(response) + ' | Response: ' + JSON.stringify(response.data));
       if (response && response.data && response.data.list) {
         return response.data.list;
       }
@@ -7029,9 +7034,9 @@ class Dreamehome extends utils.Adapter {
       },
       data: SetData,
     }).then(async (response) => {
-      this.log.info(DHurl + ' | ' + JSON.stringify(SetData) + ' | Response: ' + JSON.stringify(response.data));
+      this.log.debug(DHurl + ' | ' + JSON.stringify(SetData) + ' | Response: ' + JSON.stringify(response.data));
       if (LogData) {
-        this.log.info(DHurl + ' | ' + JSON.stringify(SetData) + ' | Response: ' + JSON.stringify(response.data));
+        this.log.debug(DHurl + ' | ' + JSON.stringify(SetData) + ' | Response: ' + JSON.stringify(response.data));
       }
       return response.data;
     }).catch((error) => {
@@ -7146,14 +7151,22 @@ class Dreamehome extends utils.Adapter {
       // verify the broker certificate against the pinned Dreame root CA (was rejectUnauthorized: false)
       ca: DH_MQTT_CA,
       rejectUnauthorized: true,
-      reconnectPeriod: 10000, // Automatic reconnect interval (10 seconds)
+      reconnectPeriod: MQTT_RECONNECT_MIN_MS, // grows on repeated failures, see 'close'
       keepalive: 60, // Send keepalive packets every 60 seconds
       connectTimeout: 30000, // Connection timeout (30 seconds)
     });
 
     // Triggered when the connection to the broker is successfully established
+    this.mqttFails = 0;
     this.mqttClient.on('connect', () => {
-      this.log.info('Connection to MQTT successfully established');
+      if (this.mqttFails) {
+        this.log.info(`MQTT connection back after ${this.mqttFails} failed attempt(s)`);
+      } else {
+        this.log.info('Connection to MQTT successfully established');
+      }
+      this.mqttFails = 0;
+      this.mqttClient.options.reconnectPeriod = MQTT_RECONNECT_MIN_MS;
+      this.setState('info.connection', true, true);
 
       // Subscribe to the device status topic
       this.mqttClient.subscribe(`/status/${DH_Did}/${DH_Uid}/${DH_Model}/${DH_Region}/`);
@@ -7178,7 +7191,7 @@ class Dreamehome extends utils.Adapter {
       try {
         message = JSON.parse(message.toString());
         if (LogData) {
-          this.log.info('Get Message from the device:' + JSON.stringify(message));
+          this.log.debug('Get Message from the device:' + JSON.stringify(message));
         }
       } catch (error) {
         this.log.error(error);
@@ -7207,7 +7220,7 @@ class Dreamehome extends utils.Adapter {
             const frameId = parseInt(parts[3]);
 		      const objectPath = element.value;
 
-            if (LogData) this.log.info(`Get Map List: ${objectPath}`);
+            if (LogData) this.log.debug(`Get Map List: ${objectPath}`);
 
             // Load immediately from the cloud – NO WAITING!
             //await this.requestMapDataFromCloud(objectPath, frameId);
@@ -7236,7 +7249,7 @@ class Dreamehome extends utils.Adapter {
               await this.DH_setState(path, Setvalue, true);
 
               if (('S' + element.siid + 'P' + element.piid == 'S4P26') && (Setvalue == 1)) {
-                this.log.info('Set and update Cleaning Mode value to: ' + JSON.stringify(Setvalue));
+                this.log.debug('Set and update Cleaning Mode value to: ' + JSON.stringify(Setvalue));
                 const ReadpathCM = DH_Did + '.control.' + (DreameStateProperties['S4P23']).replace(/\w\S*/g, function(SPName) {
                   return SPName.charAt(0).toUpperCase() + SPName.substr(1).toLowerCase();
                 }).replace(/\s/g, '');
@@ -7258,7 +7271,7 @@ class Dreamehome extends utils.Adapter {
                   case 5122: // Sweeping
                     DH_FirstOperator = 'S';
                 }
-                this.log.info(`[MODE] Cleaning Mode updated to: ${DH_NowCleaningMode}`);
+                this.log.debug(`[MODE] Cleaning Mode updated to: ${DH_NowCleaningMode}`);
               }
               let AppChanged = false;
               for (const ex in DreameActionExteParams) {
@@ -7276,9 +7289,38 @@ class Dreamehome extends utils.Adapter {
       }
     });
 
+    // H4: back off while the broker or the internet is unreachable (10 s, 20 s, 40 s ... max. 30 min)
+    this.mqttClient.on('close', () => {
+      this.mqttFails = (this.mqttFails || 0) + 1;
+      const next = Math.min(MQTT_RECONNECT_MIN_MS * 2 ** (this.mqttFails - 1), MQTT_RECONNECT_MAX_MS);
+      const c = this.mqttClient;
+      if (c) {
+        c.options.reconnectPeriod = next;
+        // mqtt.js already started its reconnect interval with the old period: restart it with the new one
+        if (c.reconnectTimer && typeof c._clearReconnect === 'function' && typeof c._setupReconnect === 'function') {
+          c._clearReconnect();
+          c._setupReconnect();
+        }
+      }
+      this.setState('info.connection', false, true);
+      const msg = `MQTT disconnected, next attempt in ${Math.round(next / 1000)} s`;
+      if (this.mqttFails === 1 || next === MQTT_RECONNECT_MAX_MS) {
+        this.log.info(msg);
+      } else {
+        this.log.debug(msg);
+      }
+    });
+
     this.mqttClient.on('error', async (error) => {
       const errorMessage = error.message || String(error);
-      if (errorMessage.includes('ECONNRESET')) {
+      if (/EAI_AGAIN|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH/.test(errorMessage)) {
+        // network or DNS gone: one warning per outage, the rest on debug
+        if ((this.mqttFails || 0) <= 1) {
+          this.log.warn('MQTT not reachable: ' + errorMessage);
+        } else {
+          this.log.debug('MQTT not reachable: ' + errorMessage);
+        }
+      } else if (errorMessage.includes('ECONNRESET')) {
         this.log.info('MQTT connection reset, reconnecting...');
       } else if (errorMessage.includes('Not authorized')) {
         this.log.error('Not authorized to connect to MQTT');
@@ -7337,7 +7379,7 @@ class Dreamehome extends utils.Adapter {
 
           } else {
           // Normal single map data (previous behavior)
-            this.log.info(`Processing map data for frame ${frameId}`);
+            this.log.debug(`Processing map data for frame ${frameId}`);
             await this.DH_uncompress(JSON.stringify(mapData), DH_Did + '.mqtt.');
             if (LogData) this.log.info(`Add map data: ${frameId}`);
 	    }
@@ -7449,7 +7491,7 @@ class Dreamehome extends utils.Adapter {
       id: requestId,
       data: { did: DH_Did, id: requestId, method: 'set_properties', params },
     };
-    this.log.info('Send set_properties: ' + JSON.stringify(params));
+    this.log.debug('Send set_properties: ' + JSON.stringify(params));
     return this.DH_URLSend(DH_Domain + DH_DHURLSENDA + DH_Host + DH_DHURLSENDB, data);
   }
 
@@ -7492,7 +7534,7 @@ class Dreamehome extends utils.Adapter {
       if (this.learningSystem) {
         const suctionLevel = this.learningSystem.parseSuctionLevel(numericValue);
         this.learningSystem.updateSessionFromMQTT({ suction: suctionLevel });
-        this.log.info(`[LEARNING-SYSTEM] Suction update: ${suctionLevel}`);
+        this.log.debug(`[LEARNING-SYSTEM] Suction update: ${suctionLevel}`);
       }
 
       // Convert Suction level number into readable text
@@ -7514,7 +7556,7 @@ class Dreamehome extends utils.Adapter {
       if (this.learningSystem) {
         const waterVolume = this.learningSystem.parseWaterVolume(fixedValue);
         this.learningSystem.updateSessionFromMQTT({ water: waterVolume });
-        this.log.info(`[LEARNING-SYSTEM] Water update: ${waterVolume} (original: ${numericValue})`);
+        this.log.debug(`[LEARNING-SYSTEM] Water update: ${waterVolume} (original: ${numericValue})`);
       }
 
       // Convert Water volume number into readable text
@@ -7535,7 +7577,7 @@ class Dreamehome extends utils.Adapter {
 
         // Cleaning has STARTED (previous status: 0, new status: 1 or 3)
         if (oldTaskStatus === 0 && (DH_NowTaskStatus === 1 || DH_NowTaskStatus === 3)) {
-          this.log.info(`[WATER] Cleaning STARTED (TaskStatus: ${DH_NowTaskStatus})`);
+          this.log.debug(`[WATER] Cleaning STARTED (TaskStatus: ${DH_NowTaskStatus})`);
 
 	       // 1. Reset position history state
           await this.setState(DH_Did + '.vis.PosHistory' + DH_CurMap, '{}', true);
@@ -7543,7 +7585,7 @@ class Dreamehome extends utils.Adapter {
           DH_CleanStatus = false;
           DH_SetLastStatus = false;
           DH_OldTaskStatus = DH_NewTaskStatus;
-          this.log.info('A new cleaning was initiated, the object state PosHistory was reset to :' + DH_OldTaskStatus);
+          this.log.debug('A new cleaning was initiated, the object state PosHistory was reset to :' + DH_OldTaskStatus);
 
 		  // 3. Reset roomData (used for coverage calculation)
           if (typeof roomData !== 'undefined') {
@@ -7607,7 +7649,7 @@ class Dreamehome extends utils.Adapter {
                 if (this.waterTracker) {
                   this.waterTracker.waterTracking.isMopping = true;
                   await this.waterTracker.handleCleaningStart();
-                  this.log.info(`[WATER] Mopping started (Mode: ${modeValue})`);
+                  this.log.debug(`[WATER] Mopping started (Mode: ${modeValue})`);
                 }
               }
             }
@@ -7625,7 +7667,7 @@ class Dreamehome extends utils.Adapter {
 
         // Cleaning has FINISHED (previous status: >0, new status: 0)
         else if (oldTaskStatus > 0 && DH_NowTaskStatus === 0) {
-          this.log.info(`[WATER] Cleaning COMPLETED`);
+          this.log.debug(`[WATER] Cleaning COMPLETED`);
 
           if (this.waterTracker.waterTracking?.isMopping) {
             await this.waterTracker.handleCleaningComplete();
@@ -7637,7 +7679,7 @@ class Dreamehome extends utils.Adapter {
           if (this.learningSystem && this.learningSystem.currentSession?.isActive) {
             setTimeout(() => {
               this.learningSystem.stopSession();
-              this.log.info('[LEARNING-SYSTEM] Session stopped');
+              this.log.debug('[LEARNING-SYSTEM] Session stopped');
             }, 2000);
           }
 
@@ -7646,7 +7688,7 @@ class Dreamehome extends utils.Adapter {
           setTimeout(async () => {
             if (this.history) {
               const now = Date.now();
-              this.log.info('[HISTORY] Starting update check (delayed)');
+              this.log.debug('[HISTORY] Starting update check (delayed)');
               await this.history.waitForNewCleaning(now);
             }
           }, 2000);
@@ -7712,10 +7754,10 @@ class Dreamehome extends utils.Adapter {
       const isMopping = WATER_TRACKING.MOPPING_MODES.includes(modeValue);
 
       // Debug log section
-      this.log.info(`=== [WATER CRITICAL] Cleaning Mode Update ===`);
-      this.log.info(`Mode value: ${modeValue}`);
-      this.log.info(`Is mopping mode => ${isMopping}`);
-      this.log.info(`Mopping modes: ${JSON.stringify(WATER_TRACKING.MOPPING_MODES)}`);
+      this.log.debug(`=== [WATER CRITICAL] Cleaning Mode Update ===`);
+      this.log.debug(`Mode value: ${modeValue}`);
+      this.log.debug(`Is mopping mode => ${isMopping}`);
+      this.log.debug(`Mopping modes: ${JSON.stringify(WATER_TRACKING.MOPPING_MODES)}`);
 
       // === LATE INITIALIZATION IF MISSING ===
       // Initialize the water tracker if it is missing and we enter a mopping mode
@@ -7724,7 +7766,7 @@ class Dreamehome extends utils.Adapter {
         try {
           this.waterTracker = new WaterTrackingModule(this, DH_Did, DH_Model, DreameMopWashLevel, UserLang);
           await this.waterTracker.initialize();
-          this.log.info(`[WATER] Late initialization successful`);
+          this.log.debug(`[WATER] Late initialization successful`);
 
           // Short delay to ensure initialization has fully completed
           await new Promise(resolve => setTimeout(resolve, 100));
@@ -7738,7 +7780,7 @@ class Dreamehome extends utils.Adapter {
       if (this.waterTracker && this.waterTracker.waterTracking) {
         this.waterTracker.waterTracking.isMopping = isMopping;
         this.waterTracker.waterTrackingCache.mode = DreameCleaningMode[UserLang][modeValue];
-        this.log.info(`[WATER] Tracker updated: isMopping=${isMopping}`);
+        this.log.debug(`[WATER] Tracker updated: isMopping=${isMopping}`);
       } else {
         // Extra debug information explaining why tracker is unavailable
         if (!this.waterTracker) {
@@ -7752,7 +7794,7 @@ class Dreamehome extends utils.Adapter {
       if (this.learningSystem) {
         const cleaningMode = this.learningSystem.parseCleaningMode(modeValue);
         this.learningSystem.updateSessionFromMQTT({ mode: cleaningMode });
-        this.log.info(`[LEARNING-SYSTEM] Mode update: ${cleaningMode} (${DreameCleaningMode[UserLang][modeValue]})`);
+        this.log.debug(`[LEARNING-SYSTEM] Mode update: ${cleaningMode} (${DreameCleaningMode[UserLang][modeValue]})`);
       }
 
       // Convert mode number into readable text
@@ -7810,7 +7852,7 @@ class Dreamehome extends utils.Adapter {
       // Inform the WaterTracker about the selected water level
       if (this.waterTracker) {
         this.waterTracker.waterTrackingCache.waterLevel = washLevel;
-		   this.log.info(`[WaterTracking] Cache updated: washLevel = ${washLevel}`);
+		   this.log.debug(`[WaterTracking] Cache updated: washLevel = ${washLevel}`);
       }
 
       InSetvalue = DreameMopWashLevel[UserLang][washLevel];
@@ -7836,7 +7878,7 @@ class Dreamehome extends utils.Adapter {
       const frameId = parseInt(parts[3]);
       const objectPath = InSetvalue;
 	  DH_CurrentObjectName = InSetvalue;//InSetvalue.replace(/\/\d+$/, '/0');
-      if (LogData) this.log.info(`Get Map List: ${objectPath}`);
+      if (LogData) this.log.debug(`Get Map List: ${objectPath}`);
 
       await this.requestMapDataFromCloud(objectPath, frameId);
     }
@@ -8318,7 +8360,7 @@ class Dreamehome extends utils.Adapter {
 
         // Debug: log if the operator changed in this string
         if (lastCleaningOperatorInThisString) {
-          this.log.info(`[TR] String ${DH_TrHistory.length - 1}: New operator ${lastCleaningOperatorInThisString} | Total points: ${newPoints.length}`);
+          this.log.debug(`[TR] String ${DH_TrHistory.length - 1}: New operator ${lastCleaningOperatorInThisString} | Total points: ${newPoints.length}`);
         }
 
         // 5. Limit number of stored points (save memory)
@@ -8326,7 +8368,7 @@ class Dreamehome extends utils.Adapter {
         if (DH_AllPathPoints.length > MAX_POINTS) {
           const removedCount = DH_AllPathPoints.length - MAX_POINTS;
           DH_AllPathPoints = DH_AllPathPoints.slice(-MAX_POINTS);
-          this.log.info(`[TR] Points limited: removed ${removedCount} oldest points`);
+          this.log.debug(`[TR] Points limited: removed ${removedCount} oldest points`);
         }
       }
 
@@ -8491,7 +8533,7 @@ class Dreamehome extends utils.Adapter {
 
   // Handles cleaning start for water tracking
   async handleCleaningStart() {
-    this.log.info(`[WATER] Cleaning task started via MQTT`);//: ${oldTaskStatus} -> ${newTaskStatus}`);
+    this.log.debug(`[WATER] Cleaning task started via MQTT`);//: ${oldTaskStatus} -> ${newTaskStatus}`);
 
     // Wait a moment for CleaningMode to update, then check if it's a mopping mode
     setTimeout(async () => {
@@ -8513,7 +8555,7 @@ class Dreamehome extends utils.Adapter {
               this.waterTracker.waterTrackingCache.waterLevel = waterLevel === -1 ? 3 : waterLevel;
             }
 
-            this.log.info(`[WATER] Mopping session started (Mode: ${modeValue})`);
+            this.log.debug(`[WATER] Mopping session started (Mode: ${modeValue})`);
           }
         }
       } catch (error) {
@@ -8527,13 +8569,13 @@ class Dreamehome extends utils.Adapter {
 
   // Handles the end of a cleaning task and triggers related processes
   async handleCleaningEnd() {
-    this.log.info(`[WATER] Cleaning task completed via MQTT`);//: ${oldTaskStatus} -> ${newTaskStatus}`);
+    this.log.debug(`[WATER] Cleaning task completed via MQTT`);//: ${oldTaskStatus} -> ${newTaskStatus}`);
 
     // Stop water tracking if a mopping session is active
     if (this.waterTracker?.waterTracking?.isMopping) {
       await this.waterTracker.handleCleaningComplete();
       this.waterTracker.waterTracking.isMopping = false;
-      this.log.info(`[WATER] Mopping session completed`);
+      this.log.debug(`[WATER] Mopping session completed`);
     }
 
     // End the learning session if one is currently active
@@ -8557,7 +8599,7 @@ class Dreamehome extends utils.Adapter {
     if (this.learningSystem && this.learningSystem.currentSession?.isActive) {
       setTimeout(() => {
         this.learningSystem.stopSession();
-        this.log.info('[LEARNING-SYSTEM] Session stopped');
+        this.log.debug('[LEARNING-SYSTEM] Session stopped');
       }, 2000);
     }
 
@@ -8670,11 +8712,11 @@ class Dreamehome extends utils.Adapter {
       isCleaning = (DH_FirstOperator === 'W' || DH_FirstOperator === 'M' || DH_FirstOperator === 'S');
 
       if (LogData) {
-        this.log.info(`[TR POS] Using pre-parsed: ${position[0]},${position[1]} (${DH_AllPathPoints.length} total points)`);
+        this.log.debug(`[TR POS] Using pre-parsed: ${position[0]},${position[1]} (${DH_AllPathPoints.length} total points)`);
       }
     } else {
     // Fallback (should never happen)
-      this.log.warn('[TR POS] No points available, parsing directly');
+      this.log.debug('[TR POS] No points available, parsing directly');
       const pathData = await this.DH_ParseTrPath(value);
       if (pathData.fullPath.length > 0) {
         const lastPoint = pathData.fullPath[pathData.fullPath.length - 1];
@@ -9187,21 +9229,21 @@ class Dreamehome extends utils.Adapter {
   // Log room coverage debug information
   logRoomCoverage(roomName, cleanedPoints, cleanedArea, totalArea, coveragePercent) {
     if (LogData) {
-      this.log.info('========== ROOM COVERAGE DEBUG ==========');
-      this.log.info(`[DEBUG] Room: ${roomName}`);
-      this.log.info(`[DEBUG] Points Collected: ${cleanedPoints}`);
-      this.log.info(`[DEBUG] Grid: 10cm � 10cm = 0.0001m² per point`);
-      this.log.info(`[DEBUG] Empirical Factor: 2/1.3 = ${(2/1.3).toFixed(3)}`);
-      this.log.info(`[DEBUG] Cleaned Area: ${cleanedArea.toFixed(2)} m²`);
-      this.log.info(`[DEBUG] Room Area: ${totalArea.toFixed(2)} m²`);
-      this.log.info(`[DEBUG] Final Coverage: ${coveragePercent.toFixed(1)}%`);
+      this.log.debug('========== ROOM COVERAGE DEBUG ==========');
+      this.log.debug(`[DEBUG] Room: ${roomName}`);
+      this.log.debug(`[DEBUG] Points Collected: ${cleanedPoints}`);
+      this.log.debug(`[DEBUG] Grid: 10cm � 10cm = 0.0001m² per point`);
+      this.log.debug(`[DEBUG] Empirical Factor: 2/1.3 = ${(2/1.3).toFixed(3)}`);
+      this.log.debug(`[DEBUG] Cleaned Area: ${cleanedArea.toFixed(2)} m²`);
+      this.log.debug(`[DEBUG] Room Area: ${totalArea.toFixed(2)} m²`);
+      this.log.debug(`[DEBUG] Final Coverage: ${coveragePercent.toFixed(1)}%`);
 
       if (cleanedArea > totalArea) {
         const sessions = Math.round(cleanedArea / totalArea);
         this.log.warn(`[WARNING] Cleaned area exceeds room size - ${sessions} cleaning sessions detected`);
         this.log.warn(`[WARNING] Expected for ${sessions} sessions: ${(totalArea * sessions).toFixed(2)} m²`);
       }
-      this.log.info('==========================================');
+      this.log.debug('==========================================');
     }
   }
 
@@ -9385,7 +9427,7 @@ class Dreamehome extends utils.Adapter {
     if (!isActuallyMopping) {
       if (this.waterTracker.waterTracking.isMopping) {
       // We previously assumed it was mopping, but it is no longer mopping
-        this.log.info(`[WATER] Mopping ended - mode changed to ${cleaningMode}`);
+        this.log.debug(`[WATER] Mopping ended - mode changed to ${cleaningMode}`);
         this.waterTracker.waterTracking.isMopping = false;
       }
       return;
@@ -9396,7 +9438,7 @@ class Dreamehome extends utils.Adapter {
       this.waterTracker.waterTracking.isMopping = true;
       this.waterTracker.waterTracking.cleaningMode = cleaningMode;
       await this.waterTracker.handleCleaningStart();
-      this.log.info(`[WATER] Mopping started - mode: ${cleaningMode}`);
+      this.log.debug(`[WATER] Mopping started - mode: ${cleaningMode}`);
     }
 
     // Validate required parameters
@@ -9407,7 +9449,7 @@ class Dreamehome extends utils.Adapter {
     try {
 
       if (LogData) {
-        this.log.info('========== WATER DEBUG]  ==========');
+        this.log.debug('========== WATER DEBUG]  ==========');
 	  this.log.info(`[WATER DEBUG] Mode: ${cleaningMode}`);
 	  this.log.info(`[WATER DEBUG] Room: ${roomName}`);
         this.log.info(`[WATER DEBUG] waterTracker exists: ${!!this.waterTracker}`);
@@ -9415,14 +9457,14 @@ class Dreamehome extends utils.Adapter {
         this.log.info(`[WATER DEBUG] isMopping: ${this.waterTracker.waterTracking.isMopping}`);
         this.log.info(`[WATER DEBUG] currentMl: ${this.waterTracker.waterTracking.currentMl}`);
         this.log.info(`[WATER DEBUG] CleanedArea: ${cleanedArea.toFixed(2)}m²`);
-        this.log.info('==========================================');
+        this.log.debug('==========================================');
       }
 
 	  // Update water consumption based on cleaned area
       await this.waterTracker.updateWaterConsumption(cleanedArea, roomName);
 
       if (LogData) {
-        this.log.info(`[WATER] Consumption updated for ${roomName}: ${cleanedArea.toFixed(2)}m²`);
+        this.log.debug(`[WATER] Consumption updated for ${roomName}: ${cleanedArea.toFixed(2)}m²`);
       }
 
     } catch (error) {
@@ -9647,7 +9689,7 @@ class Dreamehome extends utils.Adapter {
       this.waterTracker.waterTrackingCache.waterLevel = null;
       this.waterTracker.lastCleanedArea = 0;
       this.waterTracker.lastWaterUpdateTime = 0;
-      this.log.info(`[WATER] Mopping stopped`);
+      this.log.debug(`[WATER] Mopping stopped`);
     }
 
     this.log.info('[Reset: WATER | Path] Variables reset for new cleaning cycle');
@@ -9923,12 +9965,12 @@ class Dreamehome extends utils.Adapter {
     historyEntry.currentRoom) {
 
         if (LogData) {
-          this.log.info(`[WATER] Updating consumption for ${historyEntry.currentRoom}: ${historyEntry.CleanedArea}m²`);
+          this.log.debug(`[WATER] Updating consumption for ${historyEntry.currentRoom}: ${historyEntry.CleanedArea}m²`);
         }
 
         try {
           await this.waterTracker.updateWaterConsumption(historyEntry.CleanedArea, historyEntry.currentRoom);
-          //this.log.info(`[WATER] Consumption update completed`);
+          //this.log.debug(`[WATER] Consumption update completed`);
         } catch (error) {
           this.log.error(`[WATER] Consumption update failed: ${error.message}`);
           this.log.error(error.stack);
@@ -10006,7 +10048,7 @@ class Dreamehome extends utils.Adapter {
       element = JSON.parse(element);
     } catch (StGer) {
 		    if (LogData) {
-        this.log.info('Test DH_getType value: ' + element + ' return ' + StGer);
+        this.log.debug('Test DH_getType value: ' + element + ' return ' + StGer);
 		    }
     }
     const setrolT = ['string', 'text'];
@@ -10127,7 +10169,7 @@ class Dreamehome extends utils.Adapter {
     }
     await this.extendObject(createpath, ExtendObjectProp);
     if (LogData) {
-      this.log.info('common Type is: ' + setrolT + ' | common Role is: ' + setrolT[1] + ' | ' + Typeof + ' is: ' + element);
+      this.log.debug('common Type is: ' + setrolT + ' | common Role is: ' + setrolT[1] + ' | ' + Typeof + ' is: ' + element);
     }
   }
 
@@ -10137,7 +10179,7 @@ class Dreamehome extends utils.Adapter {
       VarPointValue = JSON.parse(VarPointValue);
     } catch (StSer) {
 		    if (LogData) {
-        this.log.info('Test DH_setState value: ' + VarPointValue + ' return ' + StSer);
+        this.log.debug('Test DH_setState value: ' + VarPointValue + ' return ' + StSer);
 		    }
     }
 
@@ -11781,7 +11823,7 @@ class Dreamehome extends utils.Adapter {
 
 
     // Log the initial values
-    this.log.info(`Validating room: ${room.id} | Cleaning: ${room.Cleaning}, SuctionLevel: ${suction}, WaterVolume: ${water}, Repeat: ${repeat}, CleaningMode: ${cleaningMode}, CleaningRoute: ${cleaningRoute}`);
+    this.log.debug(`Validating room: ${room.id} | Cleaning: ${room.Cleaning}, SuctionLevel: ${suction}, WaterVolume: ${water}, Repeat: ${repeat}, CleaningMode: ${cleaningMode}, CleaningRoute: ${cleaningRoute}`);
 
     // Try to get the roomOrder (original RoomID from map object)
     const roomOrderState = await this.getStateAsync(`${prefix}.${room.id}.RoomID`);
@@ -11826,28 +11868,28 @@ class Dreamehome extends utils.Adapter {
         // Convert the incoming CleaningMode (0-3) to the appropriate mapped value
         const mappedCleaningMode = modeMapping[cleaningMode] || -1; // Default to -1 if not found
 
-        this.log.info(`Using fallback for room "${room.id}" [${roomId}] from .mqtt.cleanset object | SuctionLevel: ${suction}, WaterVolume: ${water}, Repeat: ${repeat}, Room Order: ${roomOrder}, Room cleaning order: ${cleanOrder}, CleaningMode: ${cleaningMode}, CleaningRoute: ${cleaningRoute}`);
+        this.log.debug(`Using fallback for room "${room.id}" [${roomId}] from .mqtt.cleanset object | SuctionLevel: ${suction}, WaterVolume: ${water}, Repeat: ${repeat}, Room Order: ${roomOrder}, Room cleaning order: ${cleanOrder}, CleaningMode: ${cleaningMode}, CleaningRoute: ${cleaningRoute}`);
 
         // Update state objects if necessary
         if (room.SuctionLevel === -1) {
           await this.setStateAsync(`${prefix}.${room.id}.SuctionLevel`, suction, true); // Using fallback SuctionLevel
-          this.log.info(`Updated "${prefix}.${room.id}.SuctionLevel" to fallback: ${suction}`);
+          this.log.debug(`Updated "${prefix}.${room.id}.SuctionLevel" to fallback: ${suction}`);
         }
         if (room.WaterVolume === -1) {
           await this.setStateAsync(`${prefix}.${room.id}.WaterVolume`, water, true); // Using fallback WaterVolume
-          this.log.info(`Updated "${prefix}.${room.id}.WaterVolume" to fallback: ${water}`);
+          this.log.debug(`Updated "${prefix}.${room.id}.WaterVolume" to fallback: ${water}`);
         }
         if (room.Repeat === -1) {
           await this.setStateAsync(`${prefix}.${room.id}.Repeat`, repeat, true); // Using fallback Repeat
-          this.log.info(`Updated "${prefix}.${room.id}.Repeat" to fallback: ${repeat}`);
+          this.log.debug(`Updated "${prefix}.${room.id}.Repeat" to fallback: ${repeat}`);
         }
         if (room.CleaningMode === -1) {
           await this.setStateAsync(`${prefix}.${room.id}.CleaningMode`, mappedCleaningMode, true); // Using fallback CleaningMode
-          this.log.info(`Updated "${prefix}.${room.id}.CleaningMode" to fallback value: ${mappedCleaningMode}`);
+          this.log.debug(`Updated "${prefix}.${room.id}.CleaningMode" to fallback value: ${mappedCleaningMode}`);
         }
         if (room.CleaningRoute === -1) {
           await this.setStateAsync(`${prefix}.${room.id}.CleaningRoute`, cleaningRoute, true); // Using fallback CleaningRoute
-          this.log.info(`Updated "${prefix}.${room.id}.CleaningRoute" to fallback value: ${cleaningRoute}`);
+          this.log.debug(`Updated "${prefix}.${room.id}.CleaningRoute" to fallback value: ${cleaningRoute}`);
         }
       } else {
         this.log.warn(`Missing valid settings and no fallback for room "${room.id}" [${roomId}] from .mqtt.cleanset object. The cleanset data is invalid or missing. Please manually adjust the missing cleaning parameters.`);
@@ -11920,8 +11962,8 @@ class Dreamehome extends utils.Adapter {
     };
 
     // Final values are valid, return the cleaned values
-    this.log.info(`Final values for room "${room.id}": SuctionLevel: ${suction}, WaterVolume: ${water}, Repeat: ${repeat}, Room Order: ${roomOrder}, Room cleaning order: ${cleanOrder}`);
-    this.log.info(`Final Object for room "${room.id}": ` + JSON.stringify(roomObject));
+    this.log.debug(`Final values for room "${room.id}": SuctionLevel: ${suction}, WaterVolume: ${water}, Repeat: ${repeat}, Room Order: ${roomOrder}, Room cleaning order: ${cleanOrder}`);
+    this.log.debug(`Final Object for room "${room.id}": ` + JSON.stringify(roomObject));
 
     return roomObject; //[roomId, repeat, suction, water, cleanOrder]; // Return final values
   }
@@ -12701,7 +12743,7 @@ class Dreamehome extends utils.Adapter {
 
 	    // Stop device map update interval
       if (DH_UpdateMapInterval) {
-        clearInterval(DH_UpdateMapInterval);
+        this.clearInterval(DH_UpdateMapInterval);
       }
 
       // Cleanup monitoring
@@ -12998,7 +13040,7 @@ class Dreamehome extends utils.Adapter {
             this.waterTracker.directMopTracker.needsTracking
             ) {
             // DirectMopTracker reset detected
-              this.log.info('[WaterTracking] DirectMopTracker reset detected');
+              this.log.debug('[WaterTracking] DirectMopTracker reset detected');
 
               try {
                 const buttonName = id.split('.').pop();
@@ -13016,7 +13058,7 @@ class Dreamehome extends utils.Adapter {
                   await this.waterTracker.directMopTracker.resetMopPad();
                 }
 
-                this.log.info(
+                this.log.debug(
                   `[WaterTracking] DirectMopTracker reset completed for ${buttonName}`
                 );
 
@@ -13033,7 +13075,7 @@ class Dreamehome extends utils.Adapter {
             }
 
             // No DirectMopTracker available or fallback required: continue with API-based logic
-            this.log.info('[WaterTracking] API-based reset (no DirectMopTracker or fallback)');
+            this.log.debug('[WaterTracking] API-based reset (no DirectMopTracker or fallback)');
           }
 
           // Check for detergent reset button
@@ -13067,7 +13109,7 @@ class Dreamehome extends utils.Adapter {
 
               let PropertiesMethod = false;
               const requestId = Math.floor(Math.random() * 9000) + 1000;
-              this.log.info('Send Command: ' + SPvalue);
+              this.log.debug('Send Command: ' + SPvalue);
               const GetSIID = parseInt((SPkey.split('S')[1] || '').split('A')[0]);
               let GetAIID = '';
               if (SPkey.indexOf('C') !== -1) {
@@ -13122,7 +13164,7 @@ class Dreamehome extends utils.Adapter {
                     };
 
                     //this.log.info(`Set Mopp Drying to ${state.val ? 'ON (3h)' : 'OFF'}`);
-                    this.log.info('Send Extended Command (Mopp Drying): ' + JSON.stringify(CMSETURLData));
+                    this.log.debug('Send Extended Command (Mopp Drying): ' + JSON.stringify(CMSETURLData));
 
                     try {
                       await this.DH_URLSend(DH_Domain + DH_DHURLSENDA + DH_Host + DH_DHURLSENDB, CMSETURLData);
@@ -13158,7 +13200,7 @@ class Dreamehome extends utils.Adapter {
                       };
                       CMSETURLData.data.params.did = DH_Did;
                       CMSETURLData.data.params = [{siid: 4, piid: 26, 'value': 0}];
-                      this.log.info('Send Extended Command: ' + JSON.stringify(CMSETURLData));
+                      this.log.debug('Send Extended Command: ' + JSON.stringify(CMSETURLData));
                       try {
                         await this.DH_URLSend(DH_Domain + DH_DHURLSENDA + DH_Host + DH_DHURLSENDB, CMSETURLData);
                       } catch (err) {
@@ -13176,7 +13218,7 @@ class Dreamehome extends utils.Adapter {
                       piid: TSPIID,
                       'value': PiidActionValue
                     }];
-                    this.log.info('Send Extended Command: ' + JSON.stringify(PiidAction));
+                    this.log.debug('Send Extended Command: ' + JSON.stringify(PiidAction));
 			           }
 				   }
               }
@@ -13309,11 +13351,11 @@ class Dreamehome extends utils.Adapter {
 	  }
 
       if (id.toString().endsWith('.history.cleaning.sync') && state.val === true) {
-        this.log.info('[HISTORY] Manual sync triggered from VIS');
+        this.log.debug('[HISTORY] Manual sync triggered from VIS');
 
         if (this.history) {
           const now = Date.now();
-          this.log.info('[HISTORY] Starting update check');
+          this.log.debug('[HISTORY] Starting update check');
           // Checks every 10 seconds for new history data (max ~4 min)
           await this.history.waitForNewCleaning(now);
         }
@@ -13323,14 +13365,14 @@ class Dreamehome extends utils.Adapter {
 
       // Handle reload trigger for the currently selected history entry
       if (id.toString().endsWith('.vis.history.reload') && state.val === true) {
-        this.log.info('[HISTORY] Manual reload triggered from VIS');
+        this.log.debug('[HISTORY] Manual reload triggered from VIS');
 
         if (this.history) {
           // Get the currently selected index from state
           const selectedIndexState = await this.getStateAsync(`${DH_Did}.vis.history.selectedIndex`);
           const selectedIndex = selectedIndexState?.val;
 
-          this.log.info(`[HISTORY] Selected index from state: ${selectedIndex} (type: ${typeof selectedIndex})`);
+          this.log.debug(`[HISTORY] Selected index from state: ${selectedIndex} (type: ${typeof selectedIndex})`);
 
           if (selectedIndex !== undefined && selectedIndex !== null && selectedIndex !== -1) {
             // Load the raw history array (NOT the formatted object)
@@ -13338,7 +13380,7 @@ class Dreamehome extends utils.Adapter {
 
             if (rawState && rawState.val) {
               const historyArray = JSON.parse(rawState.val);
-              this.log.info(`[HISTORY] Raw history array length: ${historyArray.length}`);
+              this.log.debug(`[HISTORY] Raw history array length: ${historyArray.length}`);
 
               // Convert selectedIndex to a number if it is a string
               const index = parseInt(selectedIndex);
@@ -13346,7 +13388,7 @@ class Dreamehome extends utils.Adapter {
               if (!isNaN(index) && index >= 0 && index < historyArray.length) {
                 const currentEntry = historyArray[index];
 
-                this.log.info(`[HISTORY] Current entry at index ${index}:`);
+                this.log.debug(`[HISTORY] Current entry at index ${index}:`);
                 this.log.info(`  - date: ${currentEntry.date}`);
                 this.log.info(`  - mapFileBase: ${currentEntry.mapFileBase}`);
                 this.log.info(`  - mapObjectName: ${currentEntry.mapObjectName}`);
@@ -13354,7 +13396,7 @@ class Dreamehome extends utils.Adapter {
                 this.log.info(`  - pathPoints: ${currentEntry.pathPoints || 0}`);
 
                 if (currentEntry && currentEntry.mapObjectName) {
-                  this.log.info(`[HISTORY] Reloading map data for: ${currentEntry.mapFileBase || currentEntry.mapObjectName}`);
+                  this.log.debug(`[HISTORY] Reloading map data for: ${currentEntry.mapFileBase || currentEntry.mapObjectName}`);
 
                   try {
                     // Reload full map data including all details
@@ -13364,12 +13406,12 @@ class Dreamehome extends utils.Adapter {
                     );
 
                     if (fullData) {
-                      this.log.info(`[HISTORY] Full data loaded, enriching entry...`);
+                      this.log.debug(`[HISTORY] Full data loaded, enriching entry...`);
 
                       // Enrich the entry with the loaded map data
                       await this.history.enrichCleaningWithMapData(currentEntry, fullData);
 
-                      this.log.info(`[HISTORY] After enrichment:`);
+                      this.log.debug(`[HISTORY] After enrichment:`);
                       this.log.info(`  - parsedTr: ${!!currentEntry.parsedTr} (points: ${currentEntry.parsedTr?.pointCount || 0})`);
                       this.log.info(`  - obstacles: ${currentEntry.obstacles?.length || 0}`);
                       this.log.info(`  - sa: ${currentEntry.sa?.length || 0}`);
@@ -13417,7 +13459,7 @@ class Dreamehome extends utils.Adapter {
                         });
                       }
 
-                      this.log.info(`[HISTORY] Successfully reloaded: path=${!!currentEntry.parsedTr}, obstacles=${currentEntry.obstacles?.length || 0}`);
+                      this.log.debug(`[HISTORY] Successfully reloaded: path=${!!currentEntry.parsedTr}, obstacles=${currentEntry.obstacles?.length || 0}`);
 
                     } else {
                       this.log.warn(`[HISTORY] No full data returned for ${currentEntry.mapObjectName}`);
@@ -13436,7 +13478,7 @@ class Dreamehome extends utils.Adapter {
               this.log.warn(`[HISTORY] No raw history data found`);
             }
           } else {
-            this.log.info(`[HISTORY] No history selected (index: ${selectedIndex})`);
+            this.log.debug(`[HISTORY] No history selected (index: ${selectedIndex})`);
           }
 
           // Reset the reload trigger state
@@ -13445,7 +13487,7 @@ class Dreamehome extends utils.Adapter {
       }
 
       if (id.toString().endsWith('.history.cleaning.loadDate') && state.val) {
-        this.log.info(`[HISTORY] Load date request: ${state.val}`);
+        this.log.debug(`[HISTORY] Load date request: ${state.val}`);
 
         if (this.history) {
           try {
@@ -13453,7 +13495,7 @@ class Dreamehome extends utils.Adapter {
             const targetTimestamp = request.timestamp;
             const targetDate = request.date;
 
-            this.log.info(`[HISTORY] Searching for cleaning on ${targetDate} (timestamp: ${targetTimestamp})`);
+            this.log.debug(`[HISTORY] Searching for cleaning on ${targetDate} (timestamp: ${targetTimestamp})`);
 
             await this.history.loadHistoryByDate(targetTimestamp);
 
@@ -14164,7 +14206,7 @@ class Dreamehome extends utils.Adapter {
 
           multiRoomId++;
           roomAction.customCommand = [{'piid': 1, 'value': 18}, {'piid': 10,'value': JSON.stringify({selects: [[roomNumber, repetitions, suctionValue, moppingValue, 1]]})}];
-          //this.log.info("============Set Custom Command: " + roomAction.customCommand);
+          //this.log.debug("============Set Custom Command: " + roomAction.customCommand);
         }
 
         // Final action for all rooms
