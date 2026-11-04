@@ -7419,6 +7419,28 @@ class Dreamehome extends utils.Adapter {
     return 5120 + low;
   }
 
+  /**
+   * S4P50 carries settings as {"k": name, "v": value}, one object or a list of them.
+   * Mirrors the ones with a control state of their own.
+   */
+  async DH_SyncAutoSwitch(raw) {
+    let data = raw;
+    if (typeof raw === 'string') {
+      try {
+        data = JSON.parse(raw.trim().startsWith('[') ? raw : `[${raw}]`);
+      } catch {
+        return;
+      }
+    }
+    const list = Array.isArray(data) ? data : [data];
+    const map = { CleanRoute: 'CleanRoute', SuctionMax: 'SuctionMaxPlus', SmartHost: 'CleanGenius' };
+    for (const e of list) {
+      if (e && typeof e === 'object' && map[e.k] && Number.isFinite(Number(e.v))) {
+        await this.DH_SetControlAck(map[e.k], Number(e.v));
+      }
+    }
+  }
+
   /** set_properties at the robot, e.g. [{siid: 28, piid: 1, value: 20}] */
   async DH_SetProperties(params) {
     const requestId = Math.floor(Math.random() * 9000) + 1000;
@@ -7435,8 +7457,15 @@ class Dreamehome extends utils.Adapter {
 
     const numericValue = parseInt(InSetvalue); // Calculate numerical value
 
+    // Keep the writable controls in step with what the robot reports (DH_RequestControlState lags behind)
     if (InSetPropSPID == 'S28P1' /* "Wetness level" */ ) {
       await this.DH_SetControlAck('WetnessLevel', numericValue);
+    }
+    if (InSetPropSPID == 'S4P4' /* "Suction level" */ && numericValue >= 0 && numericValue <= 3) {
+      await this.DH_SetControlAck('SuctionLevel', numericValue);
+    }
+    if (InSetPropSPID == 'S4P50' /* "Auto switch settings" */ ) {
+      await this.DH_SyncAutoSwitch(InSetvalue);
     }
 
     //if ((InSetPropSPID !== 'S6P3' /*"Status"*/ ) && (InSetPropSPID !== 'S6P1' /*"Status"*/ )) { this.log.info(`=======> from DH_SetPropSPID: (${InSetPropSPID}) Set to : ${InSetvalue}`);}
@@ -7660,6 +7689,10 @@ class Dreamehome extends utils.Adapter {
 
     if (InSetPropSPID == 'S4P23' /* "Cleaning mode" */ ) {
       InSetvalue = await this.DH_NormalizeCleaningMode(InSetvalue);
+      const modeNum = parseInt(InSetvalue);
+      if (modeNum >= 5120 && modeNum <= 5123) {
+        await this.DH_SetControlAck('CleaningMode', modeNum);
+      }
 	  DH_NowCleaningMode = parseInt(InSetvalue);
 
 						      switch(DH_NowCleaningMode) {
