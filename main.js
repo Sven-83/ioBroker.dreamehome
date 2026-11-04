@@ -3249,8 +3249,8 @@ class Dreamehome extends utils.Adapter {
     }
 
     if (typeof global.gc !== 'function') {
-      this.log.warn('GARBAGE COLLECTION NOT AVAILABLE! Start Node.js with --expose-gc for proper memory management');
-      this.log.warn('Current memory cleanup will be very limited in effectiveness');
+      this.log.debug('GARBAGE COLLECTION NOT AVAILABLE! Start Node.js with --expose-gc for proper memory management');
+      this.log.debug('Current memory cleanup will be very limited in effectiveness');
     }
 
     // Create the setting object
