@@ -81,6 +81,10 @@ const DH_ScaleValue = 20; // Min 14 | Default 14.5
 //=================>Start Global
 let DH_OldTaskStatus = -1, DH_NewTaskStatus = -1, DH_NowTaskStatus = -1, DH_NowStatus = -1, DH_CleanStatus = false, DH_SetLastStatus = false, DH_CompletStatus = 0;
 let DH_NowCleaningMode = 0;
+// S4P23 packs the mop wash area (m², high byte) and the cleaning mode (low byte): 20 m² + mode 3 = 5123.
+// The mode tables below use 20 m² (51xx); incoming values are normalized to that, writes put the real area back.
+let DH_MopWashArea = null;
+let DH_CleaningModeLow = 0;
 let DH_FirstOperator = '';
 
 // =========== GLOBAL VARIABLES FOR TR HISTORY ===========
@@ -3309,6 +3313,42 @@ class Dreamehome extends utils.Adapter {
         },
         native: {}
       });
+
+      // Mop wash area (m²) and wetness level 1–32 as writable controls (S4P23 high byte, S28P1)
+      await this.setObjectNotExistsAsync(DH_Did + '.control.MopWashArea', {
+        type: 'state',
+        common: {
+          name: UserLang === 'DE' ? 'Mopp waschen alle … m²' : 'Mop wash every … m²',
+          type: 'number',
+          role: 'level',
+          unit: 'm²',
+          min: 1,
+          max: 255,
+          write: true,
+          read: true,
+        },
+        native: { siid: '4', piid: '23' },
+      });
+      await this.setObjectNotExistsAsync(DH_Did + '.control.WetnessLevel', {
+        type: 'state',
+        common: {
+          name: UserLang === 'DE' ? 'Wassermenge 1–32' : 'Wetness level 1–32',
+          type: 'number',
+          role: 'level',
+          min: 1,
+          max: 32,
+          write: true,
+          read: true,
+        },
+        native: { siid: '28', piid: '1' },
+      });
+      if (DH_MopWashArea !== null) {
+        await this.DH_SetControlAck('MopWashArea', DH_MopWashArea);
+      }
+      const wetnessNow = await this.getStateAsync(DH_Did + '.state.WetnessLevel');
+      if (wetnessNow && wetnessNow.val !== null) {
+        await this.DH_SetControlAck('WetnessLevel', parseInt(wetnessNow.val));
+      }
 
       await this.setObjectNotExists(DH_Did + '.control.NaturalLanguageCommand', {
         type: 'state',
@@ -7204,7 +7244,7 @@ class Dreamehome extends utils.Adapter {
               }
 
 			  if ('S' + element.siid + 'P' + element.piid == 'S4P23') { // Cleaning Mode
-				      DH_NowCleaningMode = parseInt(Setvalue);
+				      // DH_SetPropSPID already set DH_NowCleaningMode; Setvalue is the text now (parseInt gave NaN)
 				      switch(DH_NowCleaningMode) {
                   case 1: // Customize room cleaning
                   case 3840: // Customize room cleaning
@@ -7347,9 +7387,57 @@ class Dreamehome extends utils.Adapter {
 	  }, 2000); // Wait 2 second
   }
 
+  /** Write a value to a control state with ack (only if the object exists) */
+  async DH_SetControlAck(name, value) {
+    if (!DH_Did || value === null || value === undefined || Number.isNaN(value)) {
+      return;
+    }
+    const id = DH_Did + '.control.' + name;
+    if (await this.getObjectAsync(id)) {
+      await this.setStateChangedAsync(id, value, true);
+    }
+  }
+
+  /**
+   * S4P23 = mop wash area (m², high byte) * 256 + cleaning mode (low byte).
+   * Remembers both, publishes the area and returns the value in the 20 m² form (51xx) the mode tables use.
+   * Values below 256 (1 = customize, older models) pass unchanged.
+   */
+  async DH_NormalizeCleaningMode(raw) {
+    const v = parseInt(raw);
+    if (Number.isNaN(v) || v < 256) {
+      return raw;
+    }
+    const area = v >> 8;
+    const low = v & 0xff;
+    if (low > 3) {
+      return raw;
+    }
+    DH_MopWashArea = area;
+    DH_CleaningModeLow = low;
+    await this.DH_SetControlAck('MopWashArea', area);
+    return 5120 + low;
+  }
+
+  /** set_properties at the robot, e.g. [{siid: 28, piid: 1, value: 20}] */
+  async DH_SetProperties(params) {
+    const requestId = Math.floor(Math.random() * 9000) + 1000;
+    const data = {
+      did: DH_Did,
+      id: requestId,
+      data: { did: DH_Did, id: requestId, method: 'set_properties', params },
+    };
+    this.log.info('Send set_properties: ' + JSON.stringify(params));
+    return this.DH_URLSend(DH_Domain + DH_DHURLSENDA + DH_Host + DH_DHURLSENDB, data);
+  }
+
   async DH_SetPropSPID(InSetPropSPID, InSetvalue) {
 
     const numericValue = parseInt(InSetvalue); // Calculate numerical value
+
+    if (InSetPropSPID == 'S28P1' /* "Wetness level" */ ) {
+      await this.DH_SetControlAck('WetnessLevel', numericValue);
+    }
 
     //if ((InSetPropSPID !== 'S6P3' /*"Status"*/ ) && (InSetPropSPID !== 'S6P1' /*"Status"*/ )) { this.log.info(`=======> from DH_SetPropSPID: (${InSetPropSPID}) Set to : ${InSetvalue}`);}
     if (InSetPropSPID == 'S2P1' /*"State"*/ ) {
@@ -7571,6 +7659,7 @@ class Dreamehome extends utils.Adapter {
     }
 
     if (InSetPropSPID == 'S4P23' /* "Cleaning mode" */ ) {
+      InSetvalue = await this.DH_NormalizeCleaningMode(InSetvalue);
 	  DH_NowCleaningMode = parseInt(InSetvalue);
 
 						      switch(DH_NowCleaningMode) {
@@ -12627,6 +12716,25 @@ class Dreamehome extends utils.Adapter {
         if (LogData) {
           this.log.info('Receive command: ' + command + ' | Device: ' + deviceId + ' | folder: ' + folder + ' | value ' + state.val);
         }
+        if (id.endsWith('.control.MopWashArea') || id.endsWith('.control.WetnessLevel')) {
+          const v = Math.round(Number(state.val));
+          const isArea = id.endsWith('.control.MopWashArea');
+          if (!Number.isFinite(v) || v < 1 || v > (isArea ? 255 : 32)) {
+            this.log.warn(`${isArea ? 'MopWashArea' : 'WetnessLevel'}: invalid value ${state.val}`);
+            return;
+          }
+          const params = isArea
+            ? [{ siid: 4, piid: 23, value: v * 256 + DH_CleaningModeLow }]
+            : [{ siid: 28, piid: 1, value: v }];
+          try {
+            await this.DH_SetProperties(params);
+            // the robot confirms by properties_changed; ack only that the command went out
+            await this.setStateAsync(id, v, true);
+          } catch (err) {
+            this.log.warn(`Setting ${id} failed: ${err}`);
+          }
+          return;
+        }
         if (id.indexOf('.NewMap') !== -1) {
           this.log.info('Generate Map');
           await this.DH_GenerateMap(DH_CurMap, DH_Did, DH_Map, UserLang, fullQuality, DH_ScaleValue, CheckArrayRooms, roomData, canvas, context, ColorsItems, ColorsCarpet, RoomsStrokeColor, RoomsLineWidth, WallColor, WallStrokeColor, WallLineWidth, DoorsColor, DoorsStrokeColor, DoorsLineWidth, ChargerColor, ChargerStrokeColor, ChargerLineWidth, CarpetColor, CarpetStrokeColor, CarpetLineWidth, AlexacleanModes);
@@ -13022,6 +13130,13 @@ class Dreamehome extends utils.Adapter {
                         await this.DH_URLSend(DH_Domain + DH_DHURLSENDA + DH_Host + DH_DHURLSENDB, CMSETURLData);
                       } catch (err) {
                         this.log.warn('Setting "' + SPvalue + '" State failed: ' + err);
+                      }
+                    }
+                    // Cleaning mode 5120–5123 (20 m² form): keep the robot's mop wash area in the high byte
+                    if ((SPkey == 'S4P23E1') && (TSPIID === 23) && (DH_MopWashArea !== null)) {
+                      const modeNum = parseInt(PiidActionValue);
+                      if (modeNum >= 5120 && modeNum <= 5123) {
+                        PiidActionValue = DH_MopWashArea * 256 + (modeNum - 5120);
                       }
                     }
                     PiidAction = [{siid: TSSIID,
